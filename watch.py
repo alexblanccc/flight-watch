@@ -16,23 +16,33 @@ TG_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TG_CHAT_ID", "")
 
 ORIGIN, DEST = "NQZ", "NHA"
-FROM, TO = date(2027, 1, 5), date(2027, 1, 20)
+FROM, TO = date.today(), date(2027, 1, 20)
 CURRENCY = "kzt"
 PAX = 2
 
 
+def months():
+    y, m = FROM.year, FROM.month
+    while (y, m) <= (TO.year, TO.month):
+        yield f"{y}-{m:02d}"
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+
+
 def fetch():
-    q = urllib.parse.urlencode({
-        "origin": ORIGIN, "destination": DEST, "departure_at": "2027-01",
-        "one_way": "true", "sorting": "price", "limit": 1000,
-        "currency": CURRENCY, "market": "kz",
-    })
-    req = urllib.request.Request(
-        "https://api.travelpayouts.com/aviasales/v3/prices_for_dates?" + q,
-        headers={"X-Access-Token": TOKEN},
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.load(r).get("data", [])
+    items = []
+    for month in months():
+        q = urllib.parse.urlencode({
+            "origin": ORIGIN, "destination": DEST, "departure_at": month,
+            "one_way": "true", "sorting": "price", "limit": 1000,
+            "currency": CURRENCY, "market": "kz",
+        })
+        req = urllib.request.Request(
+            "https://api.travelpayouts.com/aviasales/v3/prices_for_dates?" + q,
+            headers={"X-Access-Token": TOKEN},
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            items += json.load(r).get("data", [])
+    return items
 
 
 def in_window(item):
@@ -136,7 +146,7 @@ def mac_notify(text):
 def main():
     items = sorted(filter(in_window, fetch()), key=lambda i: i["price"])
     if not items:
-        print("Нет билетов в окне 5-20 января")
+        print("Нет билетов в выбранном окне")
         return
     for it in items[:10]:
         print(re.sub("<[^>]+>", "", card(it)).replace("\n", " | "))
