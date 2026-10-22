@@ -131,12 +131,17 @@ def message(items):
 def notify(text):
     if sys.platform == "darwin":
         mac_notify(text)
-    if TG_TOKEN and TG_CHAT:
+    for chat in filter(None, (c.strip() for c in TG_CHAT.split(","))):
+        if not TG_TOKEN:
+            break
         body = urllib.parse.urlencode({
-            "chat_id": TG_CHAT, "text": text, "parse_mode": "HTML",
+            "chat_id": chat, "text": text, "parse_mode": "HTML",
             "disable_web_page_preview": "true",
         }).encode()
-        urllib.request.urlopen(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", body, timeout=30)
+        try:
+            urllib.request.urlopen(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", body, timeout=30)
+        except Exception as e:
+            print(f"Не отправилось в {chat}: {e}", file=sys.stderr)
 
 
 def mac_notify(text):
