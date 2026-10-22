@@ -16,7 +16,7 @@ TG_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TG_CHAT_ID", "")
 
 ORIGIN, DEST = "NQZ", "NHA"
-FROM, TO = date.today(), date(2027, 1, 20)
+FROM, TO = date(2027, 1, 1), date(2027, 1, 30)
 CURRENCY = "kzt"
 PAX = 2
 
