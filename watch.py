@@ -1,5 +1,5 @@
-import json, os, subprocess, sys, urllib.parse, urllib.request
-from datetime import date
+import html, json, os, re, subprocess, sys, urllib.parse, urllib.request
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -40,25 +40,97 @@ def in_window(item):
     return FROM <= d <= TO
 
 
-def fmt(item):
+AIRLINES = {
+    "DV": "SCAT", "KC": "Air Astana", "VJ": "VietJet", "VN": "Vietnam Airlines",
+    "CZ": "China Southern", "3U": "Sichuan Airlines", "FS": "FlyArystan",
+    "HU": "Hainan Airlines", "CA": "Air China", "MU": "China Eastern",
+    "TG": "Thai Airways", "SU": "Аэрофлот", "TK": "Turkish Airlines",
+}
+CITIES = {
+    "NQZ": "Астана", "CXR": "Нячанг", "ALA": "Алматы", "HAN": "Ханой",
+    "SGN": "Хошимин", "URC": "Урумчи", "TFU": "Чэнду", "BKK": "Бангкок",
+    "DMK": "Бангкок", "PKX": "Пекин", "PEK": "Пекин", "CAN": "Гуанчжоу",
+    "KUL": "Куала-Лумпур", "SZX": "Шэньчжэнь", "XIY": "Сиань", "CTU": "Чэнду",
+    "DXB": "Дубай", "IST": "Стамбул", "SIN": "Сингапур", "ICN": "Сеул",
+    "TAS": "Ташкент", "SVO": "Москва", "DME": "Москва",
+}
+MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
+          "августа", "сентября", "октября", "ноября", "декабря"]
+WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+ARRIVAL_TZ = timezone(timedelta(hours=7))
+
+
+def stops(item):
+    m = re.search(r"\d((?:[A-Z]{3}){2,})_", item.get("link", ""))
+    if not m:
+        return []
+    codes = re.findall("[A-Z]{3}", m.group(1))
+    return [CITIES.get(c, c) for c in codes[1:-1]]
+
+
+def money(n):
+    return f"{n:,}".replace(",", " ") + " ₸"
+
+
+def hm(minutes):
+    return f"{minutes // 60} ч {minutes % 60:02d} мин"
+
+
+def kind(item):
+    n = item.get("transfers", 0)
+    if n == 0:
+        return "Прямой рейс"
+    where = ", ".join(stops(item))
+    word = "пересадка" if n == 1 else "пересадки"
+    return f"{n} {word}" + (f" ({where})" if where else "")
+
+
+def card(item):
+    dep = datetime.fromisoformat(item["departure_at"])
+    arr = (dep + timedelta(minutes=item.get("duration", 0))).astimezone(ARRIVAL_TZ)
+    code = item.get("airline", "?")
+    airline = AIRLINES.get(code, code)
     link = item.get("link", "").replace("NHA1", f"NHA{PAX}", 1)
-    return (f'{item["departure_at"][:10]}  {item["price"] * PAX:,} {CURRENCY.upper()} за {PAX}  '
-            f'{item.get("airline", "?")}  пересадок: {item.get("transfers", "?")}  '
-            f'https://www.aviasales.kz{link}')
+    day = f"{dep.day} {MONTHS[dep.month - 1]} {dep.year}, {WEEKDAYS[dep.weekday()]}"
+    lines = [
+        f"<b>{html.escape(day)}</b>",
+        f"🛫 Вылет {dep:%H:%M} Астана ({item.get('origin_airport', 'NQZ')})",
+        f"🛬 Прилёт {arr:%H:%M}, {arr.day} {MONTHS[arr.month - 1]}, Нячанг ({item.get('destination_airport', 'CXR')})",
+        f"⏱ В пути: {hm(item['duration'])}" if item.get("duration") else "",
+        f"🔀 {html.escape(kind(item))}",
+        f"✈️ {html.escape(airline)}",
+        f"💰 <b>{money(item['price'])}</b> за билет, <b>{money(item['price'] * PAX)}</b> за {PAX}",
+        f'<a href="https://www.aviasales.kz{html.escape(link)}">Открыть на Aviasales</a>',
+    ]
+    return "\n".join(l for l in lines if l)
+
+
+def message(best, items, prev):
+    parts = ["🔔 <b>Нашёл дешевле: Астана → Нячанг</b>", "", card(best)]
+    if prev:
+        parts += ["", f"Раньше минимум был {money(prev['price'])} ({prev['date']})"]
+    easier = [i for i in items if i.get("transfers", 9) <= 1 and i is not best]
+    if best.get("transfers", 0) > 1 and easier:
+        parts += ["", "<b>Удобнее, с минимумом пересадок:</b>", card(easier[0])]
+    parts += ["", f"Билеты в одну сторону, цена за 1 пассажира. Наличие {PAX} мест проверяйте на сайте."]
+    return "\n".join(parts)
 
 
 def notify(text):
     if sys.platform == "darwin":
         mac_notify(text)
     if TG_TOKEN and TG_CHAT:
-        body = urllib.parse.urlencode({"chat_id": TG_CHAT, "text": text}).encode()
+        body = urllib.parse.urlencode({
+            "chat_id": TG_CHAT, "text": text, "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
+        }).encode()
         urllib.request.urlopen(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", body, timeout=30)
 
 
 def mac_notify(text):
-    short = text.split("  https://")[0].replace("\\", "").replace('"', "")
+    plain = re.sub("<[^>]+>", "", text).replace("\\", "").replace('"', "")
     subprocess.run(["osascript", "-e",
-                    f'display notification "{short}" with title "Билеты NQZ-NHA"'])
+                    f'display notification "{plain[:180]}" with title "Билеты NQZ-NHA"'])
 
 
 def main():
@@ -67,11 +139,11 @@ def main():
         print("Нет билетов в окне 5-20 января")
         return
     for it in items[:10]:
-        print(fmt(it))
+        print(re.sub("<[^>]+>", "", card(it)).replace("\n", " | "))
     best = items[0]
     prev = json.loads(STATE.read_text()) if STATE.exists() else {}
     if "price" not in prev or best["price"] < prev["price"]:
-        notify("Дешевле: " + fmt(best))
+        notify(message(best, items, prev if "price" in prev else None))
         STATE.write_text(json.dumps({"price": best["price"], "date": best["departure_at"][:10]}))
 
 
