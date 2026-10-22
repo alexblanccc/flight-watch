@@ -3,7 +3,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).parent
-STATE = HERE / "state.json"
 ENV = HERE / ".env"
 if ENV.exists():
     for line in ENV.read_text().splitlines():
@@ -115,15 +114,18 @@ def card(item):
     return "\n".join(l for l in lines if l)
 
 
-def message(best, items, prev):
-    parts = ["🔔 <b>Нашёл дешевле: Астана → Нячанг</b>", "", card(best)]
-    if prev:
-        parts += ["", f"Раньше минимум был {money(prev['price'])} ({prev['date']})"]
-    easier = [i for i in items if i.get("transfers", 9) <= 1 and i is not best]
-    if best.get("transfers", 0) > 1 and easier:
-        parts += ["", "<b>Удобнее, с минимумом пересадок:</b>", card(easier[0])]
-    parts += ["", f"Билеты в одну сторону, цена за 1 пассажира. Наличие {PAX} мест проверяйте на сайте."]
-    return "\n".join(parts)
+TOP = 5
+LOCAL_TZ = timezone(timedelta(hours=5))
+
+
+def message(items):
+    now = datetime.now(LOCAL_TZ)
+    head = (f"✈️ <b>Астана → Нячанг, {FROM.day}-{TO.day} {MONTHS[TO.month - 1]} {TO.year}</b>\n"
+            f"Самые дешёвые на {now:%H:%M}, {now.day} {MONTHS[now.month - 1]}. "
+            f"В одну сторону, цена за 1 пассажира и за {PAX}.")
+    cards = [f"<b>{n}.</b> " + card(it) for n, it in enumerate(items[:TOP], 1)]
+    foot = f"Наличие {PAX} мест проверяйте на сайте."
+    return "\n\n".join([head, *cards, foot])
 
 
 def notify(text):
@@ -148,13 +150,10 @@ def main():
     if not items:
         print("Нет билетов в выбранном окне")
         return
-    for it in items[:10]:
-        print(re.sub("<[^>]+>", "", card(it)).replace("\n", " | "))
-    best = items[0]
-    prev = json.loads(STATE.read_text()) if STATE.exists() else {}
-    if "price" not in prev or best["price"] < prev["price"]:
-        notify(message(best, items, prev if "price" in prev else None))
-        STATE.write_text(json.dumps({"price": best["price"], "date": best["departure_at"][:10]}))
+    text = message(items)
+    print(re.sub("<[^>]+>", "", text))
+    if "--dry" not in sys.argv:
+        notify(text)
 
 
 if __name__ == "__main__":
