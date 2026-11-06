@@ -1,8 +1,9 @@
-import html, json, os, re, subprocess, sys, urllib.parse, urllib.request
+import html, json, os, re, subprocess, sys, time, urllib.parse, urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).parent
+STATE = HERE / "state.json"
 ENV = HERE / ".env"
 if ENV.exists():
     for line in ENV.read_text().splitlines():
@@ -18,6 +19,10 @@ ORIGIN, DEST = "NQZ", "NHA"
 FROM, TO = date(2027, 1, 1), date(2027, 1, 30)
 CURRENCY = "kzt"
 PAX = 2
+DIRECT_MAX = 150000
+DIGEST_EVERY = 50 * 60
+ALERT_REPEATS = 3
+ALERT_GAP = 20
 
 
 def months():
@@ -128,20 +133,24 @@ def message(items):
     return "\n\n".join([head, *cards, foot])
 
 
-def notify(text):
+def notify(text, repeats=1):
     if sys.platform == "darwin":
         mac_notify(text)
-    for chat in filter(None, (c.strip() for c in TG_CHAT.split(","))):
-        if not TG_TOKEN:
-            break
-        body = urllib.parse.urlencode({
-            "chat_id": chat, "text": text, "parse_mode": "HTML",
-            "disable_web_page_preview": "true",
-        }).encode()
-        try:
-            urllib.request.urlopen(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", body, timeout=30)
-        except Exception as e:
-            print(f"Не отправилось в {chat}: {e}", file=sys.stderr)
+    chats = [c.strip() for c in TG_CHAT.split(",") if c.strip()]
+    for n in range(repeats):
+        if n:
+            time.sleep(ALERT_GAP)
+        for chat in chats:
+            if not TG_TOKEN:
+                return
+            body = urllib.parse.urlencode({
+                "chat_id": chat, "text": text, "parse_mode": "HTML",
+                "disable_web_page_preview": "true",
+            }).encode()
+            try:
+                urllib.request.urlopen(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", body, timeout=30)
+            except Exception as e:
+                print(f"Не отправилось в {chat}: {e}", file=sys.stderr)
 
 
 def mac_notify(text):
@@ -150,15 +159,53 @@ def mac_notify(text):
                     f'display notification "{plain[:180]}" with title "Билеты NQZ-NHA"'])
 
 
+def alert_message(item):
+    return (f"🚨 <b>ПРЯМОЙ РЕЙС до {money(DIRECT_MAX)} за билет!</b>\n"
+            f"Астана → Нячанг\n\n{card(item)}\n\n"
+            f"Бронь и оплата на сайте. Цену и наличие {PAX} мест проверьте сразу.")
+
+
+def key(item):
+    return f'{item["departure_at"]}|{item.get("airline", "")}|{item["price"]}'
+
+
+def load_state():
+    return json.loads(STATE.read_text()) if STATE.exists() else {}
+
+
 def main():
+    dry = "--dry" in sys.argv
     items = sorted(filter(in_window, fetch()), key=lambda i: i["price"])
     if not items:
         print("Нет билетов в выбранном окне")
         return
-    text = message(items)
-    print(re.sub("<[^>]+>", "", text))
-    if "--dry" not in sys.argv:
-        notify(text)
+    state = load_state()
+    changed = False
+
+    direct = [i for i in items if i.get("transfers") == 0 and i["price"] <= DIRECT_MAX]
+    seen = set(state.get("alerted", []))
+    for it in direct:
+        if key(it) not in seen:
+            print("АЛЕРТ:", re.sub("<[^>]+>", "", alert_message(it)).replace("\n", " | "))
+            if not dry:
+                notify(alert_message(it), ALERT_REPEATS)
+    current = sorted(key(i) for i in direct)
+    if current != sorted(seen):
+        state["alerted"] = current
+        changed = True
+
+    if time.time() - state.get("digest", 0) >= DIGEST_EVERY:
+        text = message(items)
+        print(re.sub("<[^>]+>", "", text))
+        if not dry:
+            notify(text)
+            state["digest"] = int(time.time())
+            changed = True
+    else:
+        print("Сводка уже отправлялась недавно, прямых до порога:", len(direct))
+
+    if changed and not dry:
+        STATE.write_text(json.dumps(state))
 
 
 if __name__ == "__main__":
