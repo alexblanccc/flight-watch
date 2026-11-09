@@ -15,11 +15,12 @@ TOKEN = os.environ.get("TRAVELPAYOUTS_TOKEN") or (HERE / "token.txt").read_text(
 TG_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TG_CHAT_ID", "")
 
-ORIGIN, DEST = "NQZ", "NHA"
-FROM, TO = date(2027, 1, 1), date(2027, 1, 30)
+ORIGIN, DEST = "NHA", "NQZ"
+ORIGIN_NAME, DEST_NAME = "Нячанг", "Астана"
+FROM, TO = date(2026, 11, 10), date(2026, 12, 9)
 CURRENCY = "kzt"
-PAX = 2
-DIRECT_MAX = 150000
+PAX = 1
+ALERT_MAX = 100000
 DIGEST_EVERY = 50 * 60
 ALERT_REPEATS = 3
 ALERT_GAP = 20
@@ -63,7 +64,7 @@ AIRLINES = {
 CITIES = {
     "NQZ": "Астана", "CXR": "Нячанг", "ALA": "Алматы", "HAN": "Ханой",
     "SGN": "Хошимин", "URC": "Урумчи", "TFU": "Чэнду", "BKK": "Бангкок",
-    "DMK": "Бангкок", "PKX": "Пекин", "PEK": "Пекин", "CAN": "Гуанчжоу",
+    "DMK": "Бангкок", "PQC": "Фукуок", "DAD": "Дананг", "HKG": "Гонконг", "PKX": "Пекин", "PEK": "Пекин", "CAN": "Гуанчжоу",
     "KUL": "Куала-Лумпур", "SZX": "Шэньчжэнь", "XIY": "Сиань", "CTU": "Чэнду",
     "DXB": "Дубай", "IST": "Стамбул", "SIN": "Сингапур", "ICN": "Сеул",
     "TAS": "Ташкент", "SVO": "Москва", "DME": "Москва",
@@ -71,7 +72,7 @@ CITIES = {
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
           "августа", "сентября", "октября", "ноября", "декабря"]
 WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
-ARRIVAL_TZ = timezone(timedelta(hours=7))
+ARRIVAL_TZ = timezone(timedelta(hours=5))
 
 
 def stops(item):
@@ -104,16 +105,16 @@ def card(item):
     arr = (dep + timedelta(minutes=item.get("duration", 0))).astimezone(ARRIVAL_TZ)
     code = item.get("airline", "?")
     airline = AIRLINES.get(code, code)
-    link = item.get("link", "").replace("NHA1", f"NHA{PAX}", 1)
+    link = item.get("link", "").replace(f"{DEST}1", f"{DEST}{PAX}", 1)
     day = f"{dep.day} {MONTHS[dep.month - 1]} {dep.year}, {WEEKDAYS[dep.weekday()]}"
     lines = [
         f"<b>{html.escape(day)}</b>",
-        f"🛫 Вылет {dep:%H:%M} Астана ({item.get('origin_airport', 'NQZ')})",
-        f"🛬 Прилёт {arr:%H:%M}, {arr.day} {MONTHS[arr.month - 1]}, Нячанг ({item.get('destination_airport', 'CXR')})",
+        f"🛫 Вылет {dep:%H:%M} {ORIGIN_NAME} ({item.get('origin_airport', ORIGIN)})",
+        f"🛬 Прилёт {arr:%H:%M}, {arr.day} {MONTHS[arr.month - 1]}, {DEST_NAME} ({item.get('destination_airport', DEST)})",
         f"⏱ В пути: {hm(item['duration'])}" if item.get("duration") else "",
         f"🔀 {html.escape(kind(item))}",
         f"✈️ {html.escape(airline)}",
-        f"💰 <b>{money(item['price'])}</b> за билет, <b>{money(item['price'] * PAX)}</b> за {PAX}",
+        f"💰 <b>{money(item['price'])}</b> за билет" + (f", <b>{money(item['price'] * PAX)}</b> за {PAX}" if PAX > 1 else ""),
         f'<a href="https://www.aviasales.kz{html.escape(link)}">Открыть на Aviasales</a>',
     ]
     return "\n".join(l for l in lines if l)
@@ -125,11 +126,11 @@ LOCAL_TZ = timezone(timedelta(hours=5))
 
 def message(items):
     now = datetime.now(LOCAL_TZ)
-    head = (f"✈️ <b>Астана → Нячанг, {FROM.day}-{TO.day} {MONTHS[TO.month - 1]} {TO.year}</b>\n"
+    head = (f"✈️ <b>{ORIGIN_NAME} → {DEST_NAME}, {FROM.day} {MONTHS[FROM.month - 1]} - {TO.day} {MONTHS[TO.month - 1]} {TO.year}</b>\n"
             f"Самые дешёвые на {now:%H:%M}, {now.day} {MONTHS[now.month - 1]}. "
-            f"В одну сторону, цена за 1 пассажира и за {PAX}.")
+            "В одну сторону, цена за 1 пассажира" + (f" и за {PAX}." if PAX > 1 else "."))
     cards = [f"<b>{n}.</b> " + card(it) for n, it in enumerate(items[:TOP], 1)]
-    foot = f"Наличие {PAX} мест проверяйте на сайте."
+    foot = "Цену и наличие мест проверяйте на сайте."
     return "\n\n".join([head, *cards, foot])
 
 
@@ -156,13 +157,13 @@ def notify(text, repeats=1):
 def mac_notify(text):
     plain = re.sub("<[^>]+>", "", text).replace("\\", "").replace('"', "")
     subprocess.run(["osascript", "-e",
-                    f'display notification "{plain[:180]}" with title "Билеты NQZ-NHA"'])
+                    f'display notification "{plain[:180]}" with title "Билеты NHA-NQZ"'])
 
 
 def alert_message(item):
-    return (f"🚨 <b>ПРЯМОЙ РЕЙС до {money(DIRECT_MAX)} за билет!</b>\n"
-            f"Астана → Нячанг\n\n{card(item)}\n\n"
-            f"Бронь и оплата на сайте. Цену и наличие {PAX} мест проверьте сразу.")
+    return (f"🚨 <b>Дёшево: до {money(ALERT_MAX)} за билет!</b>\n"
+            f"{ORIGIN_NAME} → {DEST_NAME}\n\n{card(item)}\n\n"
+            "Цену и наличие мест проверьте сразу.")
 
 
 def key(item):
@@ -182,7 +183,7 @@ def main():
     state = load_state()
     changed = False
 
-    direct = [i for i in items if i.get("transfers") == 0 and i["price"] <= DIRECT_MAX]
+    direct = [i for i in items if i["price"] <= ALERT_MAX]
     seen = set(state.get("alerted", []))
     for it in direct:
         if key(it) not in seen:
